@@ -1,0 +1,46 @@
+#!/bin/sh
+# i8042-resume-fix -- Lenovo IdeaPad Slim 3 15ABR8 (82XM), Linux Mint 22.3
+#
+# Problem: the PS/2 keyboard controller comes back from s2idle suspend
+# unresponsive. Every single resume logs:
+#     atkbd serio0: Failed to deactivate keyboard on isa0060/serio0
+# and on roughly 1 resume in 4 it also logs:
+#     atkbd serio0: Failed to enable keyboard on isa0060/serio0
+# which is the one that leaves the built-in keyboard dead until reboot.
+#
+# i8042.reset on the kernel cmdline does NOT fix it, and atkbd/i8042 are
+# built into this kernel so they cannot be reloaded with modprobe.
+#
+# Fix: after every resume, force a full unbind/bind of the i8042 platform
+# device. That re-runs the controller probe (including the reset) and
+# re-creates the AT keyboard input device from scratch.
+
+DRV=/sys/bus/platform/drivers/i8042
+TAG=i8042-resume-fix
+
+kbd_present() {
+    grep -q 'AT Translated Set 2 keyboard' /proc/bus/input/devices
+}
+
+case "$1" in
+post)
+    [ -w "$DRV/unbind" ] || { logger -t "$TAG" "no $DRV/unbind, nothing to do"; exit 0; }
+
+    i=1
+    while [ "$i" -le 3 ]; do
+        printf i8042 > "$DRV/unbind" 2>/dev/null
+        sleep 0.5
+        printf i8042 > "$DRV/bind" 2>/dev/null
+        sleep 0.5
+        if kbd_present; then
+            logger -t "$TAG" "i8042 re-probed after resume; keyboard present (attempt $i)"
+            exit 0
+        fi
+        i=$((i + 1))
+    done
+
+    logger -t "$TAG" "WARNING: keyboard still absent after 3 i8042 re-probe attempts"
+    ;;
+esac
+
+exit 0
